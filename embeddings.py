@@ -98,6 +98,34 @@ def embed_random_proj(text: str) -> List[float]:
     return _l2_normalize(vec)
 
 
+# --- Perf models: cheap, fixed-size, no real computation -------------------
+# Useful for benchmarking client / network / serialization overhead without
+# the embedding algorithm itself being on the hot path.
+
+DIM_PERF_TINY = 8
+DIM_PERF_SMALL = 1536   # matches OpenAI text-embedding-3-small
+DIM_PERF_LARGE = 3072   # matches OpenAI text-embedding-3-large
+
+_PERF_TINY = [0.0] * DIM_PERF_TINY
+_PERF_SMALL = [0.0] * DIM_PERF_SMALL
+# Non-zero constant so JSON byte size reflects the dim — each float
+# serializes to ~20 chars rather than collapsing to "0.0".
+_PERF_LARGE_FILL = 1.0 / math.sqrt(DIM_PERF_LARGE)
+_PERF_LARGE = [_PERF_LARGE_FILL] * DIM_PERF_LARGE
+
+
+def embed_perf_zero_tiny(text: str) -> List[float]:
+    return _PERF_TINY
+
+
+def embed_perf_zero_small(text: str) -> List[float]:
+    return _PERF_SMALL
+
+
+def embed_perf_fixed_large(text: str) -> List[float]:
+    return _PERF_LARGE
+
+
 # --- Registry ---------------------------------------------------------------
 
 EmbedFn = Callable[[str], List[float]]
@@ -106,12 +134,18 @@ MODELS: Dict[str, EmbedFn] = {
     "hash-bow-256": embed_hash_bow,
     "hash-ngram-512": embed_hash_ngram,
     "random-proj-128": embed_random_proj,
+    "perf-zero-8": embed_perf_zero_tiny,
+    "perf-zero-1536": embed_perf_zero_small,
+    "perf-fixed-3072": embed_perf_fixed_large,
 }
 
 MODEL_DIMS: Dict[str, int] = {
     "hash-bow-256": DIM_BOW,
     "hash-ngram-512": DIM_NGRAM,
     "random-proj-128": DIM_PROJ,
+    "perf-zero-8": DIM_PERF_TINY,
+    "perf-zero-1536": DIM_PERF_SMALL,
+    "perf-fixed-3072": DIM_PERF_LARGE,
 }
 
 

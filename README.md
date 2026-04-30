@@ -29,8 +29,30 @@ All three are real, well-known algorithms — implemented from scratch in stdlib
 | `hash-bow-256` | 256 | Word-level hashing trick (Weinberger et al. 2009 — same idea as scikit-learn's `HashingVectorizer`) |
 | `hash-ngram-512` | 512 | FastText-flavored character n-gram hashing (n ∈ {3,4,5}) — captures sub-word overlap, so `running` and `run` get non-zero similarity |
 | `random-proj-128` | 128 | Random projection (Johnson–Lindenstrauss) of bag-of-words via a deterministic ±1 Rademacher matrix computed on demand |
+| `perf-zero-8` | 8 | **Perf** — returns a fixed 8-dim zero vector. Tiniest possible payload, for measuring pure HTTP/JSON round-trip overhead with zero compute. |
+| `perf-zero-1536` | 1536 | **Perf** — fixed zero vector matching OpenAI `text-embedding-3-small` dim. Zero compute, zero values (so the JSON is mostly `"0.0"` separators). |
+| `perf-fixed-3072` | 3072 | **Perf** — fixed *non-zero* constant vector matching OpenAI `text-embedding-3-large` dim. Each float serializes to ~20 chars, so response size is realistic — use this to benchmark bandwidth/serialization, not just round-trip. |
 
 Because there is no training, no corpus, and no learned semantics, similarities reflect surface form (shared tokens, shared n-grams) — not meaning. That's intentional: the goal is a fast, predictable, dependency-free stand-in for real embedding services.
+
+### Perf-test models (zero compute on the server side)
+
+The three `perf-*` models exist purely so you can isolate **client / network / serialization cost** from server-side embedding cost. They all return a pre-allocated constant vector — no tokenization, no hashing, no math. Pick the dim that matches what you want to measure:
+
+- **`perf-zero-8`** → measures HTTP + JSON parsing round-trip with effectively zero payload. If your client is slow against this, the bottleneck is in the client or the network, not the server or the model.
+- **`perf-zero-1536`** → realistic OpenAI-small dim, but each float is `"0.0"` so JSON stays light. Good middle-ground.
+- **`perf-fixed-3072`** → realistic OpenAI-large dim *and* realistic float string length. Best model to benchmark throughput when the response payload size matters (batching, streaming clients, base64 vs float comparisons, etc.). For an apples-to-apples bandwidth test, also try `encoding_format: "base64"` — it cuts the response by ~6×.
+
+Quick example: throughput against a 200-request synchronous client on the same host (numbers from a verification run, not a benchmark guarantee):
+
+| Model | Response size | req/s |
+|---|---|---|
+| `perf-zero-8` | 194 B | ~2030 |
+| `perf-zero-1536` | 7.8 KB | ~2220 |
+| `perf-fixed-3072` | 67.7 KB | ~520 |
+| `hash-ngram-512` (real compute) | 12 KB | ~2210 |
+
+The drop on `perf-fixed-3072` is purely serialization + transfer — your real-world client will see the same shape against any 3072-dim embedding service.
 
 ## Running
 
