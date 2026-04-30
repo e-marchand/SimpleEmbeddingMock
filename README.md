@@ -34,7 +34,9 @@ Because there is no training, no corpus, and no learned semantics, similarities 
 
 ## Running
 
-Requires Python 3.x — nothing else.
+### Plain Python
+
+Requires Python 3.9+ — nothing else.
 
 ```bash
 python3 server.py                  # listens on 127.0.0.1:8080
@@ -44,6 +46,38 @@ python3 server.py --host 0.0.0.0   # expose on all interfaces
 python3 server.py --debug          # verbose request/response logging
 EMBEDMOCK_DEBUG=1 python3 server.py  # same, via env var
 ```
+
+### Via [uvx](https://docs.astral.sh/uv/) (no clone needed)
+
+The project ships a `pyproject.toml` and registers a `simple-embedding-mock` console script, so [`uvx`](https://docs.astral.sh/uv/guides/tools/) can run it in an isolated, ephemeral virtualenv with zero install steps:
+
+```bash
+# from a local checkout
+uvx --from . simple-embedding-mock --port 8080
+
+# directly from a Git URL (no clone required)
+uvx --from git+https://github.com/e-marchand/SimpleEmbeddingMock simple-embedding-mock
+
+# once published to PyPI
+uvx simple-embedding-mock
+```
+
+To pull in optional plugins in the same one-liner, use the [extras](https://peps.python.org/pep-0508/#extras) declared in `pyproject.toml`:
+
+```bash
+# real semantic embeddings via sentence-transformers
+uvx --from '.[sentence-transformers]' simple-embedding-mock
+
+# sklearn HashingVectorizer
+uvx --from '.[sklearn]' simple-embedding-mock
+
+# everything
+uvx --from '.[all]' simple-embedding-mock --debug
+```
+
+Available extras: `sentence-transformers`, `sklearn`, `all`.
+
+> If you don't have uv yet: `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `brew install uv`).
 
 ### Debug logging
 
@@ -147,6 +181,7 @@ Then add `"plugins.myplugin"` to `_PLUGIN_MODULES` in `registry.py`. That's the 
 - `embeddings.py` — core stdlib algorithms (always available)
 - `registry.py` — merges core models with detected plugins into a single `MODELS` dict
 - `plugins/` — optional plugins, each gated on an `import` check
+- `pyproject.toml` — packaging metadata; registers the `simple-embedding-mock` console script and declares plugin extras for `uvx` / `pip install`
 
 ## Limitations (read before using)
 
