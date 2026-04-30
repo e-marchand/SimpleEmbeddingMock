@@ -8,6 +8,7 @@ import json
 import os
 import struct
 import sys
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, List, Tuple
@@ -15,6 +16,10 @@ from typing import Any, List, Tuple
 from registry import MODELS, PLUGINS_LOADED, PLUGINS_SKIPPED, CORE_OWNER, count_tokens
 
 CREATED_TS = 1700000000
+DEBUG = False
+DEBUG_BODY_PREVIEW = 2048  # max bytes of request/response body to log
+
+_REQ_SEQ = 0
 
 
 def _models_payload() -> dict:
@@ -51,17 +56,54 @@ def _normalize_path(path: str) -> str:
     return p
 
 
+def _preview(raw: bytes, limit: int = DEBUG_BODY_PREVIEW) -> str:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"<{len(raw)} bytes binary>"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... <truncated, total {len(text)} chars>"
+
+
+def _next_req_id() -> int:
+    global _REQ_SEQ
+    _REQ_SEQ += 1
+    return _REQ_SEQ
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "SimpleEmbeddingMock/1.0"
 
-    # Keep the default access log but route it through stderr cleanly.
     def log_message(self, format: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
+
+    # --- debug helpers ------------------------------------------------------
+
+    def _dlog(self, msg: str) -> None:
+        if DEBUG:
+            sys.stderr.write(f"[debug #{self._req_id}] {msg}\n")
+
+    def _debug_request_line(self) -> None:
+        if not DEBUG:
+            return
+        hdr_lines = [f"  {k}: {v}" for k, v in self.headers.items()]
+        sys.stderr.write(
+            f"[debug #{self._req_id}] >>> {self.command} {self.path} from {self.address_string()}\n"
+            + "\n".join(hdr_lines)
+            + "\n"
+        )
 
     # --- response helpers ---------------------------------------------------
 
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
+        if DEBUG:
+            elapsed_ms = (time.monotonic() - self._t0) * 1000.0
+            sys.stderr.write(
+                f"[debug #{self._req_id}] <<< {status} ({elapsed_ms:.1f} ms, {len(body)} bytes)\n"
+                f"  body: {_preview(body)}\n"
+            )
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -72,16 +114,28 @@ class Handler(BaseHTTPRequestHandler):
     def _send_error(self, status: int, message: str, type_: str, code: str | None = None) -> None:
         self._send_json(status, _err(message, type_, code))
 
+    # --- per-request bookkeeping --------------------------------------------
+
+    def _begin(self) -> None:
+        self._req_id = _next_req_id()
+        self._t0 = time.monotonic()
+        self._debug_request_line()
+
     # --- routing ------------------------------------------------------------
 
     def do_OPTIONS(self) -> None:  # noqa: N802 (stdlib naming)
+        self._begin()
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "content-type, authorization")
         self.end_headers()
+        if DEBUG:
+            elapsed_ms = (time.monotonic() - self._t0) * 1000.0
+            sys.stderr.write(f"[debug #{self._req_id}] <<< 204 ({elapsed_ms:.1f} ms, no body)\n")
 
     def do_GET(self) -> None:  # noqa: N802
+        self._begin()
         path = _normalize_path(self.path)
         if path == "/models":
             self._send_json(HTTPStatus.OK, _models_payload())
@@ -93,6 +147,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.NOT_FOUND, f"Unknown route: {self.path}", "invalid_request_error")
 
     def do_POST(self) -> None:  # noqa: N802
+        self._begin()
         path = _normalize_path(self.path)
         if path != "/embeddings":
             self._send_error(HTTPStatus.NOT_FOUND, f"Unknown route: {self.path}", "invalid_request_error")
@@ -130,6 +185,8 @@ class Handler(BaseHTTPRequestHandler):
                 "invalid_request_error",
             )
             return
+
+        self._dlog(f"embedding model={model} inputs={len(inputs)} encoding={encoding_format}")
 
         embed = MODELS[model]["embed"]
         data = []
@@ -176,6 +233,10 @@ class Handler(BaseHTTPRequestHandler):
         if length < 0 or length > 10 * 1024 * 1024:
             return {}, "Request body too large"
         raw = self.rfile.read(length) if length else b""
+        if DEBUG:
+            sys.stderr.write(
+                f"[debug #{self._req_id}]     request body ({len(raw)} bytes): {_preview(raw)}\n"
+            )
         if not raw:
             return {}, "Empty request body"
         try:
@@ -207,6 +268,7 @@ def _coerce_inputs(raw: Any) -> Tuple[List[str], str | None]:
 
 
 def main() -> None:
+    global DEBUG
     parser = argparse.ArgumentParser(description="Simple OpenAI-compatible embedding mock server")
     parser.add_argument(
         "--port",
@@ -215,11 +277,20 @@ def main() -> None:
         help="Port to listen on (default: 8080 or $PORT)",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=os.environ.get("EMBEDMOCK_DEBUG", "").lower() in ("1", "true", "yes"),
+        help="Verbose logging: full request line, headers, body, response status/body, latency. Also via EMBEDMOCK_DEBUG=1.",
+    )
     args = parser.parse_args()
+    DEBUG = args.debug
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     sys.stderr.write(f"listening on {args.host}:{args.port}\n")
     sys.stderr.write(f"models ({len(MODELS)}): {', '.join(MODELS)}\n")
+    if DEBUG:
+        sys.stderr.write("debug logging: ON\n")
     for name, ids in PLUGINS_LOADED:
         sys.stderr.write(f"plugin loaded: {name} -> {ids}\n")
     for name, reason in PLUGINS_SKIPPED:

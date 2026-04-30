@@ -41,7 +41,26 @@ python3 server.py                  # listens on 127.0.0.1:8080
 python3 server.py --port 9000      # custom port
 PORT=9000 python3 server.py        # or via env var
 python3 server.py --host 0.0.0.0   # expose on all interfaces
+python3 server.py --debug          # verbose request/response logging
+EMBEDMOCK_DEBUG=1 python3 server.py  # same, via env var
 ```
+
+### Debug logging
+
+`--debug` (or `EMBEDMOCK_DEBUG=1`) prints, per request, a numbered block on stderr with the method/path/headers, the raw request body, and the response status, latency, and body preview (truncated at 2 KB):
+
+```
+[debug #3] >>> POST /v1/embeddings from 127.0.0.1
+  Host: 127.0.0.1:8080
+  content-type: application/json
+  Content-Length: 46
+[debug #3]     request body (46 bytes): {"model":"hash-bow-256","input":"hello debug"}
+[debug #3] embedding model=hash-bow-256 inputs=1 encoding=float
+[debug #3] <<< 200 (0.2 ms, 1467 bytes)
+  body: {"object": "list", "data": [...], "usage": {...}}
+```
+
+Without the flag, only the standard one-line access log is emitted (`127.0.0.1 - - [date] "POST /v1/embeddings HTTP/1.1" 200 -`).
 
 ## Examples
 
