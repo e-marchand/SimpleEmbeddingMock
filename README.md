@@ -80,14 +80,58 @@ resp = client.embeddings.create(model="hash-ngram-512", input="hello world")
 print(len(resp.data[0].embedding))  # 512
 ```
 
+## Optional plugins (more models, only if the lib is installed)
+
+The core stays stdlib-only, but if extra libraries are present on your machine, additional models light up automatically. Plugins live in `plugins/`, each one detects its dependency at import time and silently no-ops if the lib is missing. On startup the server logs which plugins were loaded vs skipped:
+
+```
+listening on 127.0.0.1:8080
+models (3): hash-bow-256, hash-ngram-512, random-proj-128
+plugin skipped: plugins.sentence_transformers_plugin (library not installed or no models)
+plugin skipped: plugins.sklearn_plugin (library not installed or no models)
+```
+
+Built-in plugins:
+
+| Plugin | Lib to install | Adds | Notes |
+|---|---|---|---|
+| `sentence_transformers_plugin` | `pip install sentence-transformers` | Real semantic embeddings, e.g. `all-MiniLM-L6-v2` (384 dims) | Models load lazily on first embed. Configure with `EMBEDMOCK_ST_MODELS=name1,name2`. Default: `all-MiniLM-L6-v2`. First call downloads weights (network required). |
+| `sklearn_plugin` | `pip install scikit-learn` | `sklearn-hashing-1024` | Sklearn's own `HashingVectorizer` — useful as a parity reference for the core `hash-bow-256`. |
+
+Once a plugin's lib is installed, restart the server — its models appear in `GET /v1/models` with their own `owned_by` field (`sentence-transformers`, `scikit-learn`, …) so clients can tell mock-grade from real.
+
+### Adding your own plugin
+
+Drop a new file `plugins/myplugin.py` with this shape:
+
+```python
+from importlib.util import find_spec
+
+def register():
+    if find_spec("mylib") is None:
+        return {}
+    import mylib
+
+    def embed(text: str) -> list[float]:
+        return mylib.embed(text)  # must return a list[float]
+
+    return {
+        "my-model-id": {"embed": embed, "owned_by": "mylib"},
+    }
+```
+
+Then add `"plugins.myplugin"` to `_PLUGIN_MODULES` in `registry.py`. That's the entire contract — no class hierarchy, no config, no entrypoints.
+
 ## Project layout
 
 - `server.py` — HTTP server, routing, JSON parse/serialize, error envelopes
-- `embeddings.py` — algorithms registry (`MODELS`) and shared helpers
+- `embeddings.py` — core stdlib algorithms (always available)
+- `registry.py` — merges core models with detected plugins into a single `MODELS` dict
+- `plugins/` — optional plugins, each gated on an `import` check
 
 ## Limitations (read before using)
 
-- **Not real embeddings.** Vectors are derived from token/n-gram hashing, not from a trained model. Use real services or models (OpenAI, sentence-transformers, etc.) for anything that depends on semantic similarity.
+- **Not real embeddings (core models).** The three built-in models are derived from token/n-gram hashing, not from a trained model. For real semantic similarity, install the `sentence-transformers` plugin or use a real embedding service.
 - **Mock-grade server.** Single-process `ThreadingHTTPServer`, no auth, no rate limiting, no TLS — bind to `127.0.0.1` (the default).
 - **English-leaning tokenizer.** Tokenization is `[a-z0-9]+` lowercased; non-ASCII text is effectively dropped at the word level (the n-gram model still partially handles it via byte-level encoding inside Python strings, but don't rely on it).
 - **No streaming, no async, no tool-call shape** — only the embeddings surface is mocked.

@@ -12,18 +12,22 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, List, Tuple
 
-from embeddings import MODELS, MODEL_DIMS, count_tokens
+from registry import MODELS, PLUGINS_LOADED, PLUGINS_SKIPPED, CORE_OWNER, count_tokens
 
 CREATED_TS = 1700000000
-OWNED_BY = "simple-embedding-mock"
 
 
 def _models_payload() -> dict:
     return {
         "object": "list",
         "data": [
-            {"id": name, "object": "model", "created": CREATED_TS, "owned_by": OWNED_BY}
-            for name in MODELS
+            {
+                "id": name,
+                "object": "model",
+                "created": CREATED_TS,
+                "owned_by": entry.get("owned_by", CORE_OWNER),
+            }
+            for name, entry in MODELS.items()
         ],
     }
 
@@ -82,7 +86,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/models":
             self._send_json(HTTPStatus.OK, _models_payload())
         elif path == "/":
-            self._send_json(HTTPStatus.OK, {"status": "ok", "service": OWNED_BY})
+            self._send_json(HTTPStatus.OK, {"status": "ok", "service": CORE_OWNER})
         elif path == "/embeddings":
             self._send_error(HTTPStatus.METHOD_NOT_ALLOWED, "Use POST for /embeddings", "invalid_request_error")
         else:
@@ -127,11 +131,19 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        embed = MODELS[model]
+        embed = MODELS[model]["embed"]
         data = []
         total_tokens = 0
         for i, text in enumerate(inputs):
-            vec = embed(text)
+            try:
+                vec = embed(text)
+            except Exception as exc:
+                self._send_error(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    f"Embedding failed for model '{model}': {exc}",
+                    "internal_error",
+                )
+                return
             total_tokens += count_tokens(text)
             data.append(
                 {
@@ -207,7 +219,11 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     sys.stderr.write(f"listening on {args.host}:{args.port}\n")
-    sys.stderr.write(f"models: {', '.join(MODELS)}\n")
+    sys.stderr.write(f"models ({len(MODELS)}): {', '.join(MODELS)}\n")
+    for name, ids in PLUGINS_LOADED:
+        sys.stderr.write(f"plugin loaded: {name} -> {ids}\n")
+    for name, reason in PLUGINS_SKIPPED:
+        sys.stderr.write(f"plugin skipped: {name} ({reason})\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
