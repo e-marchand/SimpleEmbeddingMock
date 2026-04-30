@@ -7,11 +7,6 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "e-marchand" }]
 keywords = ["openai", "embeddings", "mock", "testing", "server"]
-
-[project.urls]
-Homepage = "https://github.com/e-marchand/SimpleEmbeddingMock"
-Repository = "https://github.com/e-marchand/SimpleEmbeddingMock"
-Issues = "https://github.com/e-marchand/SimpleEmbeddingMock/issues"
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
@@ -32,6 +27,11 @@ all = [
 
 [project.scripts]
 simple-embedding-mock = "server:main"
+
+[project.urls]
+Homepage = "https://github.com/e-marchand/SimpleEmbeddingMock"
+Repository = "https://github.com/e-marchand/SimpleEmbeddingMock"
+Issues = "https://github.com/e-marchand/SimpleEmbeddingMock/issues"
 
 [build-system]
 requires = ["setuptools>=61"]
